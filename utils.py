@@ -16,7 +16,7 @@ def parsear_costos(texto_costos):
         list: Lista de floats con los costos, o None si hay error
     """
     try:
-        costos = [float(x.strip()) for x in texto_costos.split(',') if x.strip()]
+        costos = [float(x.strip()) for x in texto_costos.split('\n') if x.strip()]
         return costos
     except ValueError:
         st.error("❌ Error: Algunos valores de costos no son números válidos")
