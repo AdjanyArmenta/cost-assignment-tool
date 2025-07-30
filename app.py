@@ -38,10 +38,9 @@ def obtener_inputs():
     with col1:
         st.markdown("### 1️⃣ Costos Individuales")
         texto_costos = st.text_area(
-            "Pega tus costos separados por comas:",
+            "Pega tus costos separados por espacios:",
             value=costos_default,
             height=150,
-            placeholder="Ejemplo: 1.19, 0.84, 0.78, 0.93, 1.08..."
         )
         
         # Validación de costos

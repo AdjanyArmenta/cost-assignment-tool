@@ -7,10 +7,10 @@ import io
 
 def parsear_costos(texto_costos):
     """
-    Parsea el texto de costos separados por comas
+    Parsea el texto de costos separados espacios
     
     Args:
-        texto_costos (str): String con costos separados por comas
+        texto_costos (str): String con costos separados por espacios
         
     Returns:
         list: Lista de floats con los costos, o None si hay error
