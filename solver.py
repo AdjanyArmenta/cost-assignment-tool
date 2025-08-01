@@ -1,5 +1,5 @@
 """
-Módulo del solucionador de asignación de costos
+Módulo del solucionador de asignación de costos - Versión mejorada
 """
 from dataclasses import dataclass
 from itertools import combinations
@@ -52,22 +52,82 @@ class CostAssignmentSolver:
         
         # Análisis inicial
         costo_minimo = min(costos_disponibles) if costos_disponibles else 0
+        costo_maximo = max(costos_disponibles) if costos_disponibles else 0
         costo_promedio = np.mean(costos_disponibles) if costos_disponibles else 0
         
+        # Detectar objetivos extremadamente grandes
+        objetivo_maximo = max(v for _, v in objetivos_pendientes) if objetivos_pendientes else 0
+        objetivo_promedio = np.mean([v for _, v in objetivos_pendientes]) if objetivos_pendientes else 0
+        
+        # Factor de escala para detectar objetivos fuera de rango
+        factor_escala = objetivo_maximo / costo_maximo if costo_maximo > 0 else 1
+        
         # Clasificar objetivos según su relación con los costos disponibles
+        objetivos_extremos = []  # Nueva categoría para objetivos muy grandes
         objetivos_muy_pequeños = []
         objetivos_normales = []
         
         for nombre, valor in objetivos_pendientes:
-            if valor < costo_minimo * 0.7:  # Objetivo mucho menor que el costo más pequeño
+            if valor > costo_maximo * 10:  # Objetivo extremadamente grande
+                objetivos_extremos.append((nombre, valor))
+            elif valor < costo_minimo * 0.7:  # Objetivo mucho menor que el costo más pequeño
                 objetivos_muy_pequeños.append((nombre, valor))
             else:
                 objetivos_normales.append((nombre, valor))
         
-        # Fase 0: Agrupar objetivos muy pequeños
+        # Fase 0: Procesar objetivos extremadamente grandes primero
+        if objetivos_extremos:
+            status_text.text("⚡ Fase 0: Procesando objetivos extremos...")
+            progress_bar.progress(5)
+            
+            for nombre, valor in objetivos_extremos:
+                # Calcular cuántos costos necesitamos aproximadamente
+                num_costos_estimado = int(valor / costo_promedio)
+                
+                # Usar un enfoque voraz para objetivos extremos
+                costos_asignados = []
+                suma_actual = 0
+                
+                # Ordenar costos de mayor a menor para objetivos grandes
+                costos_ordenados = sorted(costos_disponibles, reverse=True)
+                
+                for costo in costos_ordenados:
+                    if suma_actual + costo <= valor * 1.1:  # Permitir hasta 10% de exceso
+                        costos_asignados.append(costo)
+                        suma_actual += costo
+                        
+                        # Si estamos cerca del objetivo, intentar ajuste fino
+                        if abs(suma_actual - valor) / valor < 0.1:
+                            # Buscar si podemos mejorar con intercambios
+                            mejor_encontrado = self._optimizar_asignacion_extrema(
+                                costos_asignados, 
+                                [c for c in costos_disponibles if c not in costos_asignados], 
+                                valor
+                            )
+                            if mejor_encontrado:
+                                costos_asignados = mejor_encontrado['costos']
+                                suma_actual = mejor_encontrado['suma']
+                            break
+                
+                if costos_asignados:
+                    asignacion = Asignacion(
+                        objetivo=nombre,
+                        valor_objetivo=valor,
+                        costos=costos_asignados,
+                        suma=suma_actual,
+                        diferencia=abs(suma_actual - valor),
+                        precision=100 - (abs(suma_actual - valor) / valor) * 100
+                    )
+                    asignaciones.append(asignacion)
+                    
+                    # Remover costos utilizados
+                    for costo in costos_asignados:
+                        costos_disponibles.remove(costo)
+        
+        # Fase 1: Agrupar objetivos muy pequeños
         if objetivos_muy_pequeños:
-            status_text.text("🔍 Fase 0: Agrupando objetivos pequeños...")
-            progress_bar.progress(10)
+            status_text.text("🔍 Fase 1: Agrupando objetivos pequeños...")
+            progress_bar.progress(15)
             
             # Ordenar objetivos pequeños por valor
             objetivos_muy_pequeños.sort(key=lambda x: x[1])
@@ -111,9 +171,9 @@ class CostAssignmentSolver:
         # Actualizar objetivos pendientes
         objetivos_pendientes = objetivos_normales
         
-        # Fase 1: Coincidencias exactas
-        status_text.text("🎯 Fase 1: Búsqueda de coincidencias exactas...")
-        progress_bar.progress(20)
+        # Fase 2: Coincidencias exactas
+        status_text.text("🎯 Fase 2: Búsqueda de coincidencias exactas...")
+        progress_bar.progress(30)
         
         for max_elementos in [1, 2, 3]:
             i = 0
@@ -139,19 +199,33 @@ class CostAssignmentSolver:
                 else:
                     i += 1
         
-        progress_bar.progress(40)
-        status_text.text(f"🎯 Fase 2: Asignando {len(objetivos_pendientes)} objetivos restantes...")
+        progress_bar.progress(50)
+        status_text.text(f"🎯 Fase 3: Asignando {len(objetivos_pendientes)} objetivos restantes...")
         
-        # Fase 2: Objetivos por categorías
-        objetivos_grandes = [(n, v) for n, v in objetivos_pendientes if v > costo_promedio * 2]
-        objetivos_medianos = [(n, v) for n, v in objetivos_pendientes if costo_minimo <= v <= costo_promedio * 2]
+        # Fase 3: Objetivos por categorías con límites adaptativos
+        # Recalcular promedio con costos restantes
+        costo_promedio_actual = np.mean(costos_disponibles) if costos_disponibles else costo_promedio
+        
+        objetivos_grandes = [(n, v) for n, v in objetivos_pendientes if v > costo_promedio_actual * 2]
+        objetivos_medianos = [(n, v) for n, v in objetivos_pendientes if costo_minimo <= v <= costo_promedio_actual * 2]
         objetivos_pequeños = [(n, v) for n, v in objetivos_pendientes if v < costo_minimo]
         
-        # Procesar objetivos grandes
+        # Procesar objetivos grandes con límites adaptativos
         objetivos_grandes.sort(key=lambda x: x[1], reverse=True)
         for nombre, valor in objetivos_grandes:
-            if len(costos_disponibles) >= 3:
-                combinacion = self._buscar_mejor_combinacion_agresiva(costos_disponibles, valor)
+            if costos_disponibles:
+                # Adaptar el número máximo de elementos según el tamaño del objetivo
+                max_elementos_adaptativo = min(
+                    len(costos_disponibles),
+                    max(7, int(valor / costo_promedio_actual * 1.5))
+                )
+                
+                combinacion = self._buscar_mejor_combinacion_adaptativa(
+                    costos_disponibles, 
+                    valor, 
+                    max_elementos_adaptativo
+                )
+                
                 if combinacion:
                     asignacion = Asignacion(
                         objetivo=nombre,
@@ -166,7 +240,7 @@ class CostAssignmentSolver:
                     for costo in combinacion['costos']:
                         costos_disponibles.remove(costo)
         
-        progress_bar.progress(60)
+        progress_bar.progress(70)
         
         # Procesar objetivos medianos
         for nombre, valor in objetivos_medianos:
@@ -186,7 +260,7 @@ class CostAssignmentSolver:
                     for costo in combinacion['costos']:
                         costos_disponibles.remove(costo)
         
-        progress_bar.progress(80)
+        progress_bar.progress(85)
         
         # Procesar objetivos pequeños restantes
         for nombre, valor in objetivos_pequeños:
@@ -203,9 +277,9 @@ class CostAssignmentSolver:
                 asignaciones.append(asignacion)
                 costos_disponibles.remove(mejor_costo)
         
-        # Fase 3: Distribución forzada
+        # Fase 4: Distribución forzada
         if costos_disponibles:
-            status_text.text("🔄 Fase 3: Distribuyendo costos restantes...")
+            status_text.text("🔄 Fase 4: Distribuyendo costos restantes...")
             self._distribuir_forzadamente(asignaciones, costos_disponibles)
         
         progress_bar.progress(100)
@@ -240,6 +314,76 @@ class CostAssignmentSolver:
         status_text.empty()
         
         return asignaciones
+    
+    def _optimizar_asignacion_extrema(self, costos_actuales, costos_disponibles, objetivo):
+        """Optimiza una asignación para objetivos extremadamente grandes"""
+        mejor_asignacion = None
+        suma_actual = sum(costos_actuales)
+        mejor_diferencia = abs(suma_actual - objetivo)
+        
+        # Intentar intercambios para mejorar la precisión
+        for i, costo_actual in enumerate(costos_actuales[:10]):  # Limitar para eficiencia
+            for costo_disponible in costos_disponibles[:20]:  # Limitar para eficiencia
+                nueva_suma = suma_actual - costo_actual + costo_disponible
+                nueva_diferencia = abs(nueva_suma - objetivo)
+                
+                if nueva_diferencia < mejor_diferencia:
+                    nuevos_costos = costos_actuales.copy()
+                    nuevos_costos[i] = costo_disponible
+                    mejor_diferencia = nueva_diferencia
+                    mejor_asignacion = {
+                        'costos': nuevos_costos,
+                        'suma': nueva_suma
+                    }
+        
+        return mejor_asignacion
+    
+    def _buscar_mejor_combinacion_adaptativa(self, costos, objetivo, max_elementos):
+        """Búsqueda adaptativa para objetivos de cualquier tamaño"""
+        mejor_combinacion = None
+        menor_diferencia_relativa = float('inf')
+        
+        # Para objetivos muy grandes, usar enfoque voraz primero
+        if objetivo > sum(costos) * 0.3:
+            # Enfoque voraz
+            costos_ordenados = sorted(costos, reverse=True)
+            costos_seleccionados = []
+            suma_actual = 0
+            
+            for costo in costos_ordenados:
+                if suma_actual + costo <= objetivo * 1.2:
+                    costos_seleccionados.append(costo)
+                    suma_actual += costo
+                    
+                    if abs(suma_actual - objetivo) / objetivo < 0.05:
+                        return {'costos': costos_seleccionados, 'suma': suma_actual}
+            
+            if costos_seleccionados:
+                mejor_combinacion = {'costos': costos_seleccionados, 'suma': suma_actual}
+                menor_diferencia_relativa = abs(suma_actual - objetivo) / objetivo
+        
+        # Para objetivos más pequeños o para refinar, usar búsqueda combinatoria
+        else:
+            # No filtrar costos para objetivos grandes
+            costos_utiles = costos if objetivo > max(costos) * 5 else [c for c in costos if c <= objetivo * 2.0]
+            costos_ordenados = sorted(costos_utiles, key=lambda x: abs(x - objetivo))[:min(20, len(costos_utiles))]
+            
+            for num_elementos in range(1, min(max_elementos + 1, len(costos_ordenados) + 1)):
+                for combo in combinations(costos_ordenados, num_elementos):
+                    suma = sum(combo)
+                    diferencia = abs(suma - objetivo)
+                    diferencia_relativa = diferencia / objetivo
+                    
+                    if diferencia_relativa < menor_diferencia_relativa:
+                        menor_diferencia_relativa = diferencia_relativa
+                        mejor_combinacion = {'costos': list(combo), 'suma': suma}
+                        
+                        # Ajustar tolerancia según el tamaño del objetivo
+                        tolerancia = 0.05 if objetivo > 50 else 0.15
+                        if diferencia_relativa < tolerancia:
+                            return mejor_combinacion
+        
+        return mejor_combinacion
     
     def _encontrar_mejor_grupo(self, objetivos_pequeños, costos_disponibles):
         """Encuentra el mejor grupo de objetivos pequeños para un costo disponible"""
